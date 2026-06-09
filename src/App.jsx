@@ -1,6 +1,18 @@
 import { useState, useEffect, useRef } from "react";
 
-// ─── EMAILJS CONFIG ───────────────────────────────────────────────────────────
+// ─── PAYSTACK CONFIG ──────────────────────────────────────────────────────────
+const PAYSTACK_PUBLIC_KEY = "pk_test_56eda5a1aea2538697144a6d995716746035545e";
+
+// Loads the Paystack SDK from CDN
+function loadPaystack() {
+  return new Promise((resolve) => {
+    if (window.PaystackPop) { resolve(); return; }
+    const s = document.createElement("script");
+    s.src = "https://js.paystack.co/v1/inline.js";
+    s.onload = () => resolve();
+    document.head.appendChild(s);
+  });
+}
 // Replace these three values with your real EmailJS credentials
 const EMAILJS_SERVICE_ID   = "service_qnuwuzs";    // EmailJS Service ID
 const EMAILJS_PUBLIC_KEY   = "C-Fi28gFmaXlpRk5x";  // EmailJS Public Key
@@ -790,15 +802,35 @@ function BuyPage({ user, onOrder, defaultNet, onNav }) {
 
   const inp = { width:"100%", padding:"12px 14px 12px 42px", border:"1.5px solid #e0e0e0", borderRadius:12, fontSize:15, color:"#0d1117", outline:"none", boxSizing:"border-box", background:"#fafafa" };
 
-  function process() {
+  async function process() {
     if(!recip||recip.length<10){ alert("Enter a valid 10-digit recipient number"); return; }
     setBusy(true);
-    setTimeout(()=>{
-      const id="ORD"+Date.now().toString().slice(-6);
-      setRef(id);
-      onOrder({id, agent:user.name, network:net, bundle:pkg.label, phone:recip, amount:pkg.price, status:"success", date:new Date().toLocaleString()});
-      setBusy(false); setStep(3);
-    },1600);
+    try {
+      await loadPaystack();
+      const handler = window.PaystackPop.setup({
+        key:      PAYSTACK_PUBLIC_KEY,
+        email:    (user.email || user.phone + "@mcdata.app"),
+        amount:   pkg.price * 100,
+        currency: "GHS",
+        ref:      "ORD" + Date.now(),
+        metadata: { agent:user.name, network:net, bundle:pkg.label, recipient:recip },
+        callback: function(response) {
+          const id = response.reference;
+          setRef(id);
+          onOrder({ id, agent:user.name, network:net, bundle:pkg.label, phone:recip, amount:pkg.price, status:"success", date:new Date().toLocaleString() });
+          setBusy(false);
+          setStep(3);
+        },
+        onClose: function() {
+          setBusy(false);
+          alert("Payment cancelled. Try again when ready.");
+        },
+      });
+      handler.openIframe();
+    } catch(e) {
+      setBusy(false);
+      alert("Could not load payment. Check your connection and try again.");
+    }
   }
 
   if(step===3) return (
