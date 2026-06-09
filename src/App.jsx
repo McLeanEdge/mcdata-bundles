@@ -1,4 +1,11 @@
 import { useState, useEffect, useRef } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+// ─── SUPABASE ─────────────────────────────────────────────────────────────────
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY
+);
 
 // ─── PAYSTACK CONFIG ──────────────────────────────────────────────────────────
 const PAYSTACK_PUBLIC_KEY = "pk_test_56eda5a1aea2538697144a6d995716746035545e";
@@ -178,11 +185,8 @@ const GREEN_DARK = "#009e54";
 const GREEN_LIGHT = "#e6f9f0";
 const GREEN_BORDER = "#b3efd4";
 
-let USERS = [
-  { id:1, name:"Admin",         phone:"0200000000", role:"admin", pin:"1234", balance:9999 },
-  { id:2, name:"Kwame Mensah",  phone:"0241234567", role:"agent", pin:"2222", balance:150  },
-  { id:3, name:"Ama Owusu",     phone:"0501234567", role:"agent", pin:"3333", balance:80   },
-];
+// USERS are now stored in Supabase — see AuthPage and TopUpPage for DB calls
+let USERS_CACHE = []; // local cache populated after login for agent listing
 
 let ORDERS = [
   { id:"ORD001", agent:"Kwame Mensah", network:"MTN",       bundle:"5GB",  phone:"0241112233", amount:18.00, status:"success", date:"2026-05-28 09:12" },
@@ -259,21 +263,27 @@ function AuthPage({ onLogin }) {
   async function submit() {
     setLoad(true);
     if (tab==="login") {
-      setTimeout(()=>{
-        const u = USERS.find(u=>u.phone===phone&&u.pin===pin);
-        if(u){ setErr(""); onLogin(u); }
-        else setErr("Invalid phone or PIN. Try 0200000000 / 1234");
-        setLoad(false);
-      },800);
+      const { data, error } = await supabase
+        .from("users")
+        .select("*")
+        .eq("phone", phone)
+        .eq("pin", pin)
+        .single();
+      if (data) { setErr(""); onLogin(data); }
+      else setErr("Incorrect phone number or PIN. Please try again.");
+      setLoad(false);
     } else {
       if(!name||!phone||!pin||!email){ setErr("Fill all fields including email"); setLoad(false); return; }
       if(phone.length<10){ setErr("Enter valid 10-digit phone"); setLoad(false); return; }
       if(!email.includes("@")){ setErr("Enter a valid email address"); setLoad(false); return; }
-      const nu={id:Date.now(),name,phone,email,role:"agent",pin,balance:0};
-      USERS.push(nu);
-      // Send notification to mcleanedge@gmail.com + welcome email to new agent
-      await sendEmails({ name, phone, email });
-      onLogin(nu);
+      const nu = { id: Date.now(), name, phone, email, role: "agent", pin, balance: 0 };
+      const { error } = await supabase.from("users").insert([nu]);
+      if (!error) {
+        await sendEmails({ name, phone, email });
+        onLogin(nu);
+      } else {
+        setErr("Registration failed. Phone number may already be in use.");
+      }
       setLoad(false);
     }
   }
@@ -1000,7 +1010,10 @@ function OrdersPage({ orders, userRole, onNav }) {
 
 // ─── AGENTS PAGE ──────────────────────────────────────────────────────────────
 function AgentsPage({ orders, onNav }) {
-  const agents = USERS.filter(u=>u.role==="agent");
+  const [agents, setAgents] = useState([]);
+  useEffect(() => {
+    supabase.from("users").select("*").eq("role","agent").then(({data})=>{ if(data) setAgents(data); });
+  }, []);
   return (
     <div>
       <PageHeader title="Agent Management" subtitle={`${agents.length} active agents`} action={
@@ -1067,13 +1080,22 @@ function TopUpPage({ onNav }) {
   const [agentId, setAgId] = useState("");
   const [amount,  setAmt]  = useState("");
   const [done,    setDone] = useState(false);
-  const agents = USERS.filter(u=>u.role==="agent");
+  const [agents,  setAgents] = useState([]);
+  useEffect(() => {
+    supabase.from("users").select("*").eq("role","agent").then(({data})=>{ if(data) setAgents(data); });
+  }, []);
   const selected = agents.find(a=>a.id===Number(agentId));
 
-  function handle() {
+  async function handle() {
     if(!selected||!amount||isNaN(amount)||Number(amount)<1){ alert("Select an agent and enter a valid amount"); return; }
-    selected.balance=(selected.balance||0)+Number(amount);
-    setDone(true); setAmt(""); setTimeout(()=>setDone(false),4000);
+    const newBal = (selected.balance||0) + Number(amount);
+    const { error } = await supabase.from("users").update({ balance: newBal }).eq("id", selected.id);
+    if (!error) {
+      setAgents(prev => prev.map(a => a.id===selected.id ? {...a, balance: newBal} : a));
+      setDone(true); setAmt(""); setTimeout(()=>setDone(false),4000);
+    } else {
+      alert("Top-up failed. Please try again.");
+    }
   }
 
   const inp2 = { width:"100%", padding:"12px 14px 12px 42px", border:"1.5px solid #e0e0e0", borderRadius:12, fontSize:15, color:"#0d1117", outline:"none", boxSizing:"border-box", background:"#fafafa" };
